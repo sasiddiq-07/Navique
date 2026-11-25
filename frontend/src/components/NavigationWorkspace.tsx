@@ -1018,7 +1018,7 @@ export const NavigationWorkspace: React.FC<NavigationWorkspaceProps> = ({
         <button
           type="button"
           onClick={() => setIsAssistantOpen(true)}
-          className="fixed bottom-14 right-4 z-40 inline-flex items-center gap-2 px-4 py-3 rounded-full bg-brand-maroon hover:bg-brand-maroonHover text-white text-xs font-semibold shadow-xl hover:shadow-2xl transition-all active:scale-95 cursor-pointer"
+          className="fixed bottom-14 right-20 z-40 inline-flex items-center gap-2 px-4 py-3 rounded-full bg-brand-maroon hover:bg-brand-maroonHover text-white text-xs font-semibold shadow-xl hover:shadow-2xl transition-all active:scale-95 cursor-pointer"
         >
           <Bot className="w-4 h-4" />
           <span>{t.aiAssistantTitle}</span>

@@ -722,7 +722,7 @@ export const FloorMapCanvas: React.FC<FloorMapCanvasProps> = ({
 
         {/* Floating Quick Action Bar when a place is selected on map */}
         {selectedPlace && (
-          <div className="absolute bottom-4 left-4 right-16 sm:right-auto sm:max-w-sm z-20 bg-white/95 backdrop-blur border border-brand-borderWarm rounded-2xl px-4 py-3 shadow-lg flex items-center justify-between gap-3">
+          <div className="absolute bottom-4 left-4 right-[4.5rem] sm:right-auto sm:max-w-[calc(100%-5.5rem)] md:max-w-sm z-20 bg-white/95 backdrop-blur border border-brand-borderWarm rounded-2xl px-4 py-3 shadow-lg flex items-center justify-between gap-3">
             <div className="min-w-0">
               <p className="text-[11px] font-semibold text-neutral-500">
                 {selectedPlace.floor} · {selectedPlace.wheelchairAccessible ? t.wheelchairAccessibleYes : t.wheelchairAccessibleNo}

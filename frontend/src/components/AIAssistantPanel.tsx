@@ -109,6 +109,15 @@ export const AIAssistantPanel: React.FC<AIAssistantPanelProps> = ({
     }
   }, [messages, loading, isOpen]);
 
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
+
   if (!isOpen) return null;
 
   const sendQuestion = async (rawQuestion: string) => {
@@ -153,7 +162,7 @@ export const AIAssistantPanel: React.FC<AIAssistantPanelProps> = ({
 
   return (
     <div
-      className="fixed bottom-4 right-4 z-50 w-[calc(100vw-2rem)] sm:w-[400px] max-h-[82vh] bg-white rounded-3xl border border-brand-borderWarm shadow-2xl flex flex-col overflow-hidden"
+      className="fixed bottom-14 right-4 sm:right-20 z-50 w-[calc(100vw-2rem)] sm:w-[400px] max-h-[80vh] bg-white rounded-3xl border border-brand-borderWarm shadow-2xl flex flex-col overflow-hidden"
       role="dialog"
       aria-label={t.aiAssistantTitle}
     >
