@@ -248,10 +248,11 @@ export async function askNavigationAssistant(
       })
     : null;
 
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 9000);
+  const controller = new AbortController();
+  const timeoutMs = 60_000;
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
+  try {
     const response = await fetch('/api/assistant', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -279,28 +280,59 @@ export async function askNavigationAssistant(
         })),
       }),
     });
-    clearTimeout(timeout);
 
-    if (response.ok) {
-      const data = (await response.json()) as {
-        reply?: string;
-        targetPlaceId?: string;
-        suggestEmergencyExit?: boolean;
-      };
-      if (data.reply) {
-        const validPlace = data.targetPlaceId
-          ? dataset.places.find((p) => p.id === data.targetPlaceId)?.id
-          : undefined;
-        return {
-          reply: data.reply,
-          targetPlaceId: validPlace,
-          suggestEmergencyExit: Boolean(data.suggestEmergencyExit),
+    if (!response.ok) {
+      let responseBody = '';
+      try {
+        responseBody = (await response.text()).slice(0, 300);
+      } catch {
+        // Ignore body read failures when logging HTTP errors
+      }
+      console.error(
+        `[AssistantClient] /api/assistant returned non-OK status ${response.status} (${response.statusText})${
+          responseBody ? `: ${responseBody}` : ''
+        }`
+      );
+    } else {
+      try {
+        const data = (await response.json()) as {
+          reply?: unknown;
+          targetPlaceId?: unknown;
+          suggestEmergencyExit?: unknown;
         };
+
+        if (typeof data?.reply === 'string' && data.reply.trim().length > 0) {
+          const validPlace =
+            typeof data.targetPlaceId === 'string'
+              ? dataset.places.find((p) => p.id === data.targetPlaceId)?.id
+              : undefined;
+          return {
+            reply: data.reply,
+            targetPlaceId: validPlace,
+            suggestEmergencyExit: Boolean(data.suggestEmergencyExit),
+          };
+        }
+
+        console.error(
+          '[AssistantClient] /api/assistant returned an invalid payload (missing non-empty "reply" string):',
+          data
+        );
+      } catch (parseError) {
+        console.error('[AssistantClient] /api/assistant returned invalid JSON:', parseError);
       }
     }
-  } catch {
-    // Graceful fallback to deterministic rule-based building assistant
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      console.error(
+        `[AssistantClient] /api/assistant request timed out after ${timeoutMs / 1000} seconds.`
+      );
+    } else {
+      console.error('[AssistantClient] /api/assistant network or request failure:', error);
+    }
+  } finally {
+    clearTimeout(timeout);
   }
 
+  console.warn('[AssistantClient] Falling back to local navigation assistant.');
   return runLocalAssistant(params);
 }
