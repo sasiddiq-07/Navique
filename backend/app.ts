@@ -1,4 +1,5 @@
 import express from 'express';
+import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { assistantRouter } from './routes/assistant.ts';
@@ -13,8 +14,26 @@ export async function createApp() {
 
   app.use(express.json({ limit: '1mb' }));
 
+  // CORS headers for API routes (supports Vercel frontend + Render backend deployments)
+  app.use('/api', (req, res, next) => {
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Content-Type');
+    if (req.method === 'OPTIONS') {
+      res.sendStatus(204);
+      return;
+    }
+    next();
+  });
+
   // Backend API routes
+  app.get('/api/health', (_req, res) => {
+    res.json({ status: 'ok' });
+  });
   app.use('/api/assistant', assistantRouter);
+  app.use('/api', (_req, res) => {
+    res.status(404).json({ error: 'API endpoint not found' });
+  });
 
   // Serve frontend via Vite in development or prebuilt static bundle in production
   if (process.env.NODE_ENV !== 'production') {
@@ -26,10 +45,13 @@ export async function createApp() {
     app.use(vite.middlewares);
   } else {
     const distDir = path.join(ROOT_DIR, 'dist');
-    app.use(express.static(distDir));
-    app.get('*', (_req, res) => {
-      res.sendFile(path.join(distDir, 'index.html'));
-    });
+    const indexPath = path.join(distDir, 'index.html');
+    if (fs.existsSync(indexPath)) {
+      app.use(express.static(distDir));
+      app.get('*', (_req, res) => {
+        res.sendFile(indexPath);
+      });
+    }
   }
 
   return app;

@@ -95,7 +95,7 @@ function runLocalAssistant(params: AskAssistantParams): AssistantResponsePayload
   const dangerZones = emergencyMode && activeScenario ? activeScenario.dangerZones : [];
 
   const isEmergencyQuery =
-    /(emergency|safe exit|fire exit|evacuate|danger|sos|అత్యవసర|నిష్క్రమణ|आपातकाल|निकास)/i.test(q);
+    /(emergency|safe exit|fire exit|evacuate|danger|sos|nearest exit|exit|way out|అత్యవసర|నిష్క్రమణ|आपातकाल|निकास)/i.test(q);
   const isRestroomQuery =
     /(restroom|washroom|toilet|bathroom|wc|రెస్ట్|వాష్|शौचालय|रेस्टरूम)/i.test(q);
   const isLiftQuery =
@@ -203,7 +203,32 @@ function runLocalAssistant(params: AskAssistantParams): AssistantResponsePayload
     return { reply: blockedReplies[language], targetPlaceId: matched.id };
   }
 
-  // 5. Helpful directory fallback if question didn't match a specific place
+  // 5. Floor overview query (GF / 1F / 2F / 3F)
+  const floorMatch: { floor: 'GF' | '1F' | '2F' | '3F'; pattern: RegExp }[] = [
+    { floor: 'GF', pattern: /\b(gf|ground floor|floor 0|గ్రౌండ్|भूतल)\b/i },
+    { floor: '1F', pattern: /\b(1f|first floor|1st floor|floor 1|మొదటి అంతస్తు|पहली मंजिल)\b/i },
+    { floor: '2F', pattern: /\b(2f|second floor|2nd floor|floor 2|రెండవ అంతస్తు|दूसरी मंजिल)\b/i },
+    { floor: '3F', pattern: /\b(3f|third floor|3rd floor|floor 3|మూడవ అంతస్తు|तीसरी मंजिल)\b/i },
+  ];
+  const matchedFloor = floorMatch.find(({ pattern }) => pattern.test(q))?.floor;
+  if (matchedFloor) {
+    const highlights = dataset.places
+      .filter((p) => p.floor === matchedFloor && p.category !== 'transit' && !p.isLift && !p.isRestroom)
+      .slice(0, 8)
+      .map((p) => p.name[language]);
+    if (highlights.length > 0) {
+      const floorLabel = FLOOR_FULL_LABELS[matchedFloor][language];
+      const list = highlights.join(', ');
+      const replies: Record<Language, string> = {
+        en: `On ${floorLabel} of ${dataset.name.en}, you can find: ${list}. Ask me about any of these places for step-by-step directions.`,
+        te: `${dataset.name.te} లోని ${floorLabel} లో ఇవి ఉన్నాయి: ${list}. వీటిలో దేనికైనా మార్గం కోసం నన్ను అడగండి.`,
+        hi: `${dataset.name.hi} की ${floorLabel} पर ये स्थान हैं: ${list}। इनमें से किसी के भी मार्ग के लिए मुझसे पूछें।`,
+      };
+      return { reply: replies[language] };
+    }
+  }
+
+  // 6. Helpful directory fallback if question didn't match a specific place
   const fallbackReplies: Record<Language, string> = {
     en:
       dataset.id === 'mall'
@@ -294,31 +319,46 @@ export async function askNavigationAssistant(
         }`
       );
     } else {
-      try {
-        const data = (await response.json()) as {
-          reply?: unknown;
-          targetPlaceId?: unknown;
-          suggestEmergencyExit?: unknown;
-        };
-
-        if (typeof data?.reply === 'string' && data.reply.trim().length > 0) {
-          const validPlace =
-            typeof data.targetPlaceId === 'string'
-              ? dataset.places.find((p) => p.id === data.targetPlaceId)?.id
-              : undefined;
-          return {
-            reply: data.reply,
-            targetPlaceId: validPlace,
-            suggestEmergencyExit: Boolean(data.suggestEmergencyExit),
-          };
+      const contentType = response.headers.get('content-type') ?? '';
+      if (!contentType.toLowerCase().includes('application/json')) {
+        let preview = '';
+        try {
+          preview = (await response.text()).slice(0, 120).replace(/\s+/g, ' ').trim();
+        } catch {
+          // Ignore body read failures when logging non-JSON responses
         }
-
         console.error(
-          '[AssistantClient] /api/assistant returned an invalid payload (missing non-empty "reply" string):',
-          data
+          `[AssistantClient] /api/assistant returned non-JSON response (content-type: "${contentType || 'unknown'}")${
+            preview ? `: ${preview}` : ''
+          }`
         );
-      } catch (parseError) {
-        console.error('[AssistantClient] /api/assistant returned invalid JSON:', parseError);
+      } else {
+        try {
+          const data = (await response.json()) as {
+            reply?: unknown;
+            targetPlaceId?: unknown;
+            suggestEmergencyExit?: unknown;
+          };
+
+          if (typeof data?.reply === 'string' && data.reply.trim().length > 0) {
+            const validPlace =
+              typeof data.targetPlaceId === 'string'
+                ? dataset.places.find((p) => p.id === data.targetPlaceId)?.id
+                : undefined;
+            return {
+              reply: data.reply,
+              targetPlaceId: validPlace,
+              suggestEmergencyExit: Boolean(data.suggestEmergencyExit),
+            };
+          }
+
+          console.error(
+            '[AssistantClient] /api/assistant returned an invalid payload (missing non-empty "reply" string):',
+            data
+          );
+        } catch (parseError) {
+          console.error('[AssistantClient] /api/assistant returned invalid JSON:', parseError);
+        }
       }
     }
   } catch (error) {

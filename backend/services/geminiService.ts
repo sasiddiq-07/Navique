@@ -1,4 +1,4 @@
-import { GoogleGenAI, Type } from '@google/genai';
+import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
 
 export interface AssistantPlaceSummary {
   id: string;
@@ -92,62 +92,163 @@ export function isGeminiConfigured(): boolean {
   return createClient() !== null;
 }
 
+const ASSISTANT_MODELS = ['gemini-4-hydrogen', 'gemini-3.1-flash-lite'] as const;
+const modelCooldownUntil = new Map<string, number>();
+
+function getErrorStatus(error: unknown): number | undefined {
+  if (typeof error === 'object' && error !== null && 'status' in error) {
+    const status = Number((error as { status?: unknown }).status);
+    if (Number.isFinite(status)) return status;
+  }
+  return undefined;
+}
+
+function isQuotaOrRateLimitError(error: unknown): boolean {
+  const status = getErrorStatus(error);
+  if (status === 429) return true;
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes('RESOURCE_EXHAUSTED') || message.includes('"code":429');
+}
+
+function isTransientUpstreamError(error: unknown): boolean {
+  const status = getErrorStatus(error);
+  if (status === 500 || status === 502 || status === 503 || status === 504 || status === 408) {
+    return true;
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    message.includes('UNAVAILABLE') ||
+    message.includes('INTERNAL') ||
+    message.includes('high demand') ||
+    message.includes('fetch failed') ||
+    message.includes('ECONNRESET')
+  );
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function parseAssistantJson(rawText: string): AssistantReply | null {
+  const cleaned = rawText
+    .trim()
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```$/, '')
+    .trim();
+
+  if (!cleaned) return null;
+
+  let jsonCandidate = cleaned;
+  if (!jsonCandidate.startsWith('{')) {
+    const start = jsonCandidate.indexOf('{');
+    const end = jsonCandidate.lastIndexOf('}');
+    if (start !== -1 && end > start) {
+      jsonCandidate = jsonCandidate.slice(start, end + 1);
+    }
+  }
+
+  const parsed = JSON.parse(jsonCandidate) as {
+    reply?: unknown;
+    targetPlaceId?: unknown;
+    suggestEmergencyExit?: unknown;
+  };
+
+  if (typeof parsed.reply !== 'string' || !parsed.reply.trim()) {
+    return null;
+  }
+
+  return {
+    reply: parsed.reply.trim(),
+    targetPlaceId:
+      typeof parsed.targetPlaceId === 'string' && parsed.targetPlaceId.trim()
+        ? parsed.targetPlaceId.trim()
+        : undefined,
+    suggestEmergencyExit: Boolean(parsed.suggestEmergencyExit),
+  };
+}
+
 export async function generateAssistantReply(
   payload: AssistantRequestPayload
 ): Promise<AssistantReply | null> {
   const client = createClient();
   if (!client) return null;
 
-  const response = await client.models.generateContent({
-    model: 'gemini-4-hydrogen',
-    contents: payload.question.slice(0, 600),
-    config: {
-      systemInstruction: buildSystemPrompt(payload),
-      responseMimeType: 'application/json',
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          reply: {
-            type: Type.STRING,
-            description: 'Helpful navigation response in the requested language.',
-          },
-          targetPlaceId: {
-            type: Type.STRING,
-            description: 'Exact place id from the directory if relevant, else empty string.',
-          },
-          suggestEmergencyExit: {
-            type: Type.BOOLEAN,
-            description: 'True when the user asks for an emergency exit or evacuation guidance.',
-          },
-        },
-        required: ['reply', 'targetPlaceId', 'suggestEmergencyExit'],
-      },
-    },
-  });
+  const now = Date.now();
+  const availableModels = ASSISTANT_MODELS.filter(
+    (model) => (modelCooldownUntil.get(model) ?? 0) <= now
+  );
+  const modelsToTry = availableModels.length > 0 ? availableModels : [...ASSISTANT_MODELS];
 
-  const rawText = (response.text ?? '')
-    .trim()
-    .replace(/^```(?:json)?\s*/i, '')
-    .replace(/\s*```$/, '')
-    .trim();
+  const systemInstruction = buildSystemPrompt(payload);
+  const contents = payload.question.slice(0, 600);
+  const maxAttemptsPerModel = 3;
+  let lastError: unknown = null;
 
-  if (!rawText) {
-    return null;
+  for (const model of modelsToTry) {
+    for (let attempt = 1; attempt <= maxAttemptsPerModel; attempt += 1) {
+      try {
+        const response = await client.models.generateContent({
+          model,
+          contents,
+          config: {
+            systemInstruction,
+            responseMimeType: 'application/json',
+            ...(model === 'gemini-4-hydrogen'
+              ? { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } }
+              : {}),
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                reply: {
+                  type: Type.STRING,
+                  description: 'Helpful navigation response in the requested language.',
+                },
+                targetPlaceId: {
+                  type: Type.STRING,
+                  description: 'Exact place id from the directory if relevant, else empty string.',
+                },
+                suggestEmergencyExit: {
+                  type: Type.BOOLEAN,
+                  description: 'True when the user asks for an emergency exit or evacuation guidance.',
+                },
+              },
+              required: ['reply', 'targetPlaceId', 'suggestEmergencyExit'],
+            },
+          },
+        });
+
+        const parsed = parseAssistantJson(response.text ?? '');
+        if (parsed) {
+          return parsed;
+        }
+      } catch (error) {
+        lastError = error;
+
+        if (isQuotaOrRateLimitError(error)) {
+          // Skip this exhausted model for 15 minutes and immediately try the next model
+          modelCooldownUntil.set(model, Date.now() + 15 * 60 * 1000);
+          break;
+        }
+
+        if (isTransientUpstreamError(error) && attempt < maxAttemptsPerModel) {
+          const delayMs = attempt * 700 + Math.floor(Math.random() * 250);
+          await sleep(delayMs);
+          continue;
+        }
+
+        // If transient retries exhausted on this model, try the next model before giving up
+        if (isTransientUpstreamError(error)) {
+          break;
+        }
+
+        throw error;
+      }
+    }
   }
 
-  const parsed = JSON.parse(rawText) as {
-    reply?: string;
-    targetPlaceId?: string;
-    suggestEmergencyExit?: boolean;
-  };
-
-  if (!parsed.reply) {
-    return null;
+  if (lastError) {
+    throw lastError;
   }
 
-  return {
-    reply: parsed.reply,
-    targetPlaceId: parsed.targetPlaceId || undefined,
-    suggestEmergencyExit: Boolean(parsed.suggestEmergencyExit),
-  };
+  return null;
 }

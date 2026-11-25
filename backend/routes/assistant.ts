@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import {
-  AssistantRequestPayload,
+  type AssistantRequestPayload,
   generateAssistantReply,
   isGeminiConfigured,
 } from '../services/geminiService.ts';
@@ -48,9 +48,28 @@ assistantRouter.post('/', async (req, res) => {
 
     res.json(result);
   } catch (error) {
-    console.error('Assistant route error:', error);
-    res.status(502).json({ fallback: true, reason: 'Assistant service unavailable' });
+    const status =
+      typeof error === 'object' && error !== null && 'status' in error
+        ? Number((error as { status?: unknown }).status)
+        : undefined;
+    const message = error instanceof Error ? error.message : 'Unknown upstream error';
+    console.error('Assistant route error:', { status, message });
+    const httpStatus = status === 429 ? 429 : status === 503 ? 503 : 502;
+    const reason =
+      status === 429
+        ? 'Assistant quota or rate limit exceeded'
+        : status === 503
+          ? 'Assistant service temporarily busy'
+          : 'Assistant service unavailable';
+    res.status(httpStatus).json({
+      fallback: true,
+      reason,
+    });
   }
+});
+
+assistantRouter.all('/', (_req, res) => {
+  res.status(405).json({ error: 'Method not allowed. Use POST /api/assistant.' });
 });
 
 export { assistantRouter };
