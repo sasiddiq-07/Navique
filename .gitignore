@@ -1,0 +1,21 @@
+# Dependencies & build output
+node_modules/
+dist/
+build/
+coverage/
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Logs & OS files
+*.log
+.DS_Store
+Thumbs.db
+
+# Local tooling & workspace metadata
+.aistudio/
+metadata.json
+public/assets/aistudio/
+bun.lock
