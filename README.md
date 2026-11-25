@@ -201,12 +201,6 @@ The QR checkpoint feature uses predefined checkpoint selections rather than live
 
 AI-generated assistance is provided to support navigation and does not replace official emergency instructions.
 
-## 👨‍💻 Contributors
-
-**Siddiq** – Project Development
-
-_Add other team members and their contributions here._
-
 ## 📄 License
 
 This project is developed for educational and demonstration purposes. Add a license to this repository if you intend to distribute or reuse the project under specific terms.
